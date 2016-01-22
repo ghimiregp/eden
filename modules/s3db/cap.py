@@ -75,6 +75,7 @@ class S3CAPModel(S3Model):
              "cap_area_tag",
              "cap_info_category_opts",
              "cap_template_represent",
+             "cap_alert_ack",
              )
 
     def model(self):
@@ -529,6 +530,7 @@ class S3CAPModel(S3Model):
                                         },
                        cap_info = "alert_id",
                        cap_resource = "alert_id",
+                       cap_alert_ack = "alert_id",
                        )
 
         self.set_method("cap", "alert",
@@ -1396,6 +1398,44 @@ T("Upload an image file(bmp, gif, jpeg or png), max. 800x800 pixels!"))),
                   onaccept = update_alert_id(tablename),
         #         deduplicate = self.cap_area_tag_deduplicate,
                   )
+
+        # ---------------------------------------------------------------------
+        # Acknowledgement Table for CAP Alert
+
+        tablename = "cap_alert_ack"
+        define_table(tablename,
+                     alert_id(readable = False,
+                              writable = False,
+                              ),
+                     self.gis_location_id(widget = S3LocationSelector(\
+                                                        show_map = False,
+                                                        show_postcode = False,
+                                                        ),
+                                          ),
+                     s3_datetime("acknowlegded_on",
+                                 label = T("Acknowledged On"),
+                                 default = "now",
+                                 ),
+                     Field("acknowledged_by",
+                           label = T("Acknowledged By"),
+                           requires = IS_NOT_EMPTY(),
+                           ),
+                     s3_comments(),
+                     *s3_meta_fields())
+
+        # CRUD Strings
+        crud_strings[tablename] = Storage(
+            label_create = T("Add Acknowledgement"),
+            title_display = T("Alert Acknowledgement"),
+            title_list = T("Alert Acknowledgements"),
+            title_update = T("Edit Acknowledgement"),
+            subtitle_list = T("List Alert Acknowledgements"),
+            label_list_button = T("List Alert Acknowledgements"),
+            label_delete_button = T("Delete Acknowledgement"),
+            msg_record_created = T("Acknowledgement added"),
+            msg_record_modified = T("Acknowledgement updated"),
+            msg_record_deleted = T("Acknowledgement deleted"),
+            msg_list_empty = T("No Acknowledgements currently received for this alert"))
 
         # ---------------------------------------------------------------------
         # Pass names back to global scope (s3.*)

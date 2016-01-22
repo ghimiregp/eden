@@ -28,6 +28,7 @@
 """
 
 __all__ = ("S3EventModel",
+           "S3EventChecklistModel",
            "S3IncidentModel",
            "S3IncidentReportModel",
            "S3IncidentReportOrganisationGroupModel",
@@ -557,6 +558,251 @@ class S3EventModel(S3Model):
         if duplicate:
             item.id = duplicate.id
             item.method = item.METHOD.UPDATE
+
+# =============================================================================
+class S3EventChecklistModel(S3Model):
+    """
+        Event Checklist Model
+
+        For configuring the checklist on incident of the event
+        - Used by SAMBRO
+    """
+
+    names = ("event_checklist_template",
+             "event_checklist_template_entry",
+             "event_checklist",
+             "event_checklist_entry",
+             )
+
+    def model(self):
+
+        T = current.T
+        add_components = self.add_components
+        configure = self.configure
+        define_table = self.define_table
+        response = current.response
+
+        # ---------------------------------------------------------------------
+        # Event Checklist Template
+        #
+        tablename = "event_checklist_template"
+        define_table(tablename,
+                     Field("name",
+                           label = T("Name of Checklist"),
+                           requires = IS_NOT_EMPTY(),
+                           comment = DIV(_class="tooltip",
+                                         _title="%s|%s" % (T("SOP Checklist Name"),
+                                                           T("A name to identify the Standard Operating Procedure SOP check-list template"))),
+                           ),
+                     self.event_type_id(ondelete = "CASCADE",
+                                        ),
+                     self.gis_location_id(widget = S3LocationSelector(\
+                                                        show_map = False,
+                                                        show_postcode = False,
+                                                        ),
+                                          ),
+                     Field("instruction", "text",
+                           label = T("Instructions"),
+                           comment = DIV(_class="tooltip",
+                                         _title="%s|%s" % (T("Instructions"),
+                                                           T("Any instructions for the first-responders on how, when, and where to complete the SOP check-list"))),
+                           ),
+                     s3_comments(),
+                     *s3_meta_fields())
+
+        response.s3.crud_strings[tablename] = Storage(
+            label_create = T("Create Checklist Template"),
+            title_display = T("Checklist Template Details"),
+            title_list = T("Checklists Templates"),
+            title_update = T("Event Checklist Template"),
+            title_upload = T("Import Checklists Templates"),
+            label_list_button = T("List Checklists Templates"),
+            label_delete_button = T("Delete Checklist Template"),
+            msg_record_created = T("Checklist Template added"),
+            msg_record_modified = T("Checklist Template updated"),
+            msg_record_deleted = T("Checklist Template removed"),
+            msg_list_empty = T("No Checklists Templates currently registered")
+            )
+
+        crud_form = S3SQLCustomForm("name",
+                                    "event_type_id",
+                                    "location_id",
+                                    S3SQLInlineComponent("checklist_template_entry",
+                                                         name = "checklist_template_entry",
+                                                         label = T("Description"),
+                                                         fields = ["checklist_order",
+                                                                   "name",
+                                                                   ]
+                                                         ),
+                                    "instruction",
+                                    "comments",
+                                    )
+
+        configure(tablename,
+                  crud_form = crud_form,
+                  )
+
+        checklist_template_represent = S3Represent(lookup=tablename, translate=True)
+
+        checklist_template_id = S3ReusableField("checklist_template_id", "reference %s" % tablename,
+                                                label = T("Checklist Template"),
+                                                ondelete = "CASCADE",
+                                                represent = checklist_template_represent,
+                                                requires = IS_EMPTY_OR(
+                                                            IS_ONE_OF(db, "event_checklist_template.id",
+                                                                      checklist_template_represent)),
+                                                )
+
+        # Components
+        add_components(tablename,
+                       event_checklist_template_entry = "checklist_template_id",
+                       )
+
+        # ---------------------------------------------------------------------
+        # Event checklist entry template
+        #
+        # ---------------------------------------------------------------------
+        tablename = "event_checklist_template_entry"
+        define_table(tablename,
+                     checklist_template_id(),
+                     Field("name",
+                           label = T("Description"),
+                           requires = IS_NOT_EMPTY(),
+                           ),
+                     Field("checklist_order", "integer",
+                           label = T("Order"),
+                           requires = IS_NOT_EMPTY(),
+                           ),
+                     *s3_meta_fields())
+
+        response.s3.crud_strings[tablename] = Storage(
+            label_create = T("Create Checklist Template Entry"),
+            title_display = T("Checklist Template Entry Details"),
+            title_list = T("Checklists Template Entries"),
+            title_update = T("Event Checklist Template Entry"),
+            title_upload = T("Import Checklists Template Entries"),
+            label_list_button = T("List Checklists Template Entries"),
+            label_delete_button = T("Delete Checklist Template Entry"),
+            msg_record_created = T("Checklist Template Entry added"),
+            msg_record_modified = T("Checklist Template Entry updated"),
+            msg_record_deleted = T("Checklist Template Entry removed"),
+            msg_list_empty = T("No Checklists Template Entries currently registered")
+            )
+
+        # ---------------------------------------------------------------------
+        # Event checklist
+        #
+        # ---------------------------------------------------------------------
+        tablename = "event_checklist"
+        define_table(tablename,
+                     self.super_link("pe_id", "pr_pentity"),
+                     #@ToDo Perform Filtered Lookup
+                     self.event_event_id(ondelete = "CASCADE",
+                                         ),
+                     self.event_incident_id(ondelete = "CASCADE",
+                                            ),
+                     self.gis_location_id(widget = S3LocationSelector(\
+                                                        show_map = False,
+                                                        show_postcode = False,
+                                                        ),
+                                          ),
+                     Field("instruction", "text",
+                           label = T("Instructions"),
+                           comment = DIV(_class="tooltip",
+                                         _title="%s|%s" % (T("Instructions"),
+                                                           T("Any instructions for the first-responders on how, when, and where to complete the SOP check-list"))),
+                           ),
+                     *s3_meta_fields())
+
+        response.s3.crud_strings[tablename] = Storage(
+            label_create = T("Create Checklist"),
+            title_display = T("Checklist Details"),
+            title_list = T("Checklists"),
+            title_update = T("Edit Checklist"),
+            title_upload = T("Import Checklists"),
+            label_list_button = T("List Checklists"),
+            label_delete_button = T("Delete Checklist"),
+            msg_record_created = T("Checklist added"),
+            msg_record_modified = T("Checklist updated"),
+            msg_record_deleted = T("Checklist removed"),
+            msg_list_empty = T("No Checklists currently registered")
+            )
+
+        crud_form = S3SQLCustomForm("pe_id",
+                                    "name",
+                                    "event_id",
+                                    "incident_id",
+                                    "location_id",
+                                    "instruction",
+                                    S3SQLInlineComponent("checklist_entry",
+                                                         name = "checklist_entry",
+                                                         label = T("Description"),
+                                                         fields = ["checklist_order",
+                                                                   "name",
+                                                                   "date_completed",
+                                                                   "comments",
+                                                                   ]
+                                                         ),
+                                    )
+
+        configure(tablename,
+                  crud_form = crud_form,
+                  )
+
+        checklist_represent = S3Represent(lookup=tablename, translate=True)
+
+        event_checklist_id = S3ReusableField("event_checklist_id", "reference %s" % tablename,
+                                             label = T("Checklist"),
+                                             ondelete = "CASCADE",
+                                             represent = checklist_represent,
+                                             requires = IS_EMPTY_OR(
+                                                         IS_ONE_OF(db, "event_checklist.id",
+                                                                   checklist_represent)),
+                                             )
+
+        # Components
+        add_components(tablename,
+                       event_checklist_entry = "event_checklist_id",
+                       )
+
+        # ---------------------------------------------------------------------
+        # Event checklist entry
+        #
+        # ---------------------------------------------------------------------
+        tablename = "event_checklist_entry"
+        define_table(tablename,
+                     event_checklist_id(),
+                     Field("name",
+                           label = T("Description"),
+                           requires = IS_NOT_EMPTY(),
+                           ),
+                     Field("checklist_order", "integer",
+                           label = T("Order"),
+                           requires = IS_NOT_EMPTY(),
+                           ),
+                     s3_datetime("date_completed",
+                                 label = T("Date of Completion"),
+                                 default = "now",
+                                 ),
+                     s3_comments(),
+                     *s3_meta_fields())
+
+        # CRUD strings
+        response.s3.crud_strings[tablename] = Storage(
+            label_create = T("New Checklist Entry"),
+            title_display = T("Checklist Entry Details"),
+            title_list = T("Checklist Entries"),
+            title_update = T("Edit Checklist Entry"),
+            label_list_button = T("List Checklist Entries"),
+            label_delete_button = T("Delete Checklist Entry"),
+            msg_record_created = T("Checklist Entry added"),
+            msg_record_modified = T("Checklist Entry updated"),
+            msg_record_deleted = T("Checklist Entry deleted"),
+            msg_list_empty = T("No Checklist Entries currently registered"))
+
+        # ---------------------------------------------------------------------
+        # Pass names back to global scope (s3.*)
+        return {}
 
 # =============================================================================
 class S3IncidentModel(S3Model):

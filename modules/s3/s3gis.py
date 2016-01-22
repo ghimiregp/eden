@@ -6101,6 +6101,102 @@ page.render('%(filename)s', {format: 'jpeg', quality: '100'});''' % \
         return output
 
     # -------------------------------------------------------------------------
+    @staticmethod
+    def check_bounds(bbox1,
+                     bbox2,
+                     ):
+        """
+            Checks whether two bounding box intersect with each other
+
+            @param bbox1, bbox2: bounding boxes to compare
+
+            returns True for intersection False otherwise
+
+            See https://rbrundritt.wordpress.com/2009/10/03/determining-if-two-bounding-boxes-overlap/
+        """
+
+        difflon = abs(bbox1["lon_min"] + bbox1["lon_max"] - bbox2["lon_min"] - bbox2["lon_max"])
+        difflat = abs(bbox1["lat_max"] + bbox1["lat_min"] - bbox2["lat_max"] - bbox2["lat_min"])
+        difflon_ = bbox1["lon_max"] - bbox1["lon_min"] + bbox2["lon_max"] - bbox2["lon_min"]
+        difflat_ = bbox1["lat_max"] - bbox1["lat_min"] + bbox2["lat_max"] - bbox2["lat_min"]
+
+        if ((difflon <= difflon_) and (difflat <= difflat_)):
+            return True
+
+        return False
+
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def intersects(location_id1,
+                   location_id2,
+                   ):
+        """
+            Checks whether locations intersect with each other
+
+            @param location_id1, location_id2: location_ids to compare
+
+            returns True for intersection False otherwise
+        """
+
+        db = current.db
+        gtable = current.s3db.gis_location
+
+        location1 = db(gtable.id == location_id1).select(gtable.level,
+                                                         gtable.parent,
+                                                         gtable.path,
+                                                         gtable.wkt,
+                                                         gtable.lat_max,
+                                                         gtable.lon_max,
+                                                         gtable.lat_min,
+                                                         gtable.lon_min,
+                                                         limitby=(0, 1)).first()
+        location2 = db(gtable.id == location_id2).select(gtable.level,
+                                                         gtable.parent,
+                                                         gtable.path,
+                                                         gtable.wkt,
+                                                         gtable.lat_max,
+                                                         gtable.lon_max,
+                                                         gtable.lat_min,
+                                                         gtable.lon_min,
+                                                         gtable.the_geom,
+                                                         limitby=(0, 1)).first()
+
+        if location1 and location2:
+            if location1.level or location2.level:
+                if location_id2 in [int(n) for n in location1.path.split("/")] or \
+                   location_id1 in [int(n) for n in location2.path.split("/")]:
+                    # Match
+                    return True            
+            else:
+                bbox1 = {"lat_max" : location1.lat_max,
+                         "lon_max" : location1.lon_max,
+                         "lat_min" : location1.lat_min,
+                         "lon_min" : location1.lon_min
+                         }
+
+                bbox2 = {"lat_max" : location2.lat_max,
+                         "lon_max" : location2.lon_max,
+                         "lat_min" : location2.lat_min,
+                         "lon_min" : location2.lon_min
+                         }
+                if GIS.check_bounds(bbox1, bbox2):
+                    if current.deployment_settings.get_gis_spatialdb():
+                        query = (gtable.id == location_id2) & \
+                                (gtable.the_geom.st_intersects(location1.wkt))
+                        if len(db(query).select(gtable.id)) > 0:
+                            return True
+                    else:
+                        try:
+                            from shapely.wkt import loads
+                        except ImportError:
+                            current.log.debug("ERROR: install shapely module for checking intersection")
+                        else:
+                            polygon1 = loads(location1.wkt)
+                            polygon2 = loads(location2.wkt)
+                            return polygon1.intersects(polygon2)
+        return False
+
+    # -------------------------------------------------------------------------
     def show_map(self,
                  id = "default_map",
                  height = None,

@@ -2439,6 +2439,20 @@ class S3Config(Storage):
 
         return self.cap.get("post_to_twitter", False)
 
+    def get_cap_ack(self):
+        """
+            Whether CAP alerts have workflow for ACKnowledgement
+        """
+
+        return self.cap.get("ack_ack", False)
+    
+    def get_cap_checklist(self):
+        """
+            Whether CAP alerts have workflow for Checklists
+        """
+        
+        return self.cap.get("cap_checklist", False)
+
     # -------------------------------------------------------------------------
     # CMS: Content Management System
     #

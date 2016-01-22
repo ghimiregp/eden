@@ -43,6 +43,12 @@ def config(settings):
     # GeoNames username
     settings.gis.geonames_username = "eden_test"
 
+    # checklist workflow
+    settings.cap.ack_checklist = True
+
+    # ack workflow
+    settings.cap.ack_workflow = True
+
     # =========================================================================
     # System Settings
     # -------------------------------------------------------------------------
@@ -229,6 +235,7 @@ def config(settings):
     # -------------------------------------------------------------------------
     def customise_cap_alert_resource(r, tablename):
 
+        db = current.db
         s3db = current.s3db
         def onapprove(record):
             # Normal onapprove
@@ -236,6 +243,72 @@ def config(settings):
 
             # Sync FTP Repository
             current.s3task.async("cap_ftp_sync")
+            
+            if settings.get_cap_checklist() or settings.get_cap_ack():
+                alert_id = int(record["id"])
+                itable = s3db.cap_info
+                ltable = s3db.cap_area_location
+                
+                all_info = []
+
+                # Event Type should be the same for all Info segments in the same alert
+                info_row = db(itable.alert_id == alert_id).select(\
+                                                    itable.event_type_id,
+                                                    itable.priority,
+                                                    limitby=(0, 1)).first()
+                area_location_rows = db(ltable.alert_id == alert_id).select(\
+                                                        ltable.location_id)
+                if info_row and area_location_rows:
+                    ptable = s3db.pr_group
+                    stable = s3db.pr_subscription
+                    ftable = s3db.pr_filter
+
+                    # Hard-coded group_type; 3 is relief team
+                    query = (ptable.deleted != True) & \
+                            (stable.deleted != True) & \
+                            (ptable.group_type == 3) & \
+                            (stable.pe_id == ptable.pe_id) & \
+                            (ftable.id == stable.filter_id)
+                    rows = db(query).select(ptable.id,
+                                            stable.id,
+                                            ftable.query)
+                    if rows:
+                        alert_locations = [area_location_row.location_id
+                                           for area_location_row in area_location_rows]
+
+                        for row in rows:
+                            event_types, priorities, locations = get_events_priorities_locations(\
+                                                                    row.pr_filter.query)
+                            check, location_info = get_info(info_row.event_type_id,
+                                                            info_row.priority,
+                                                            alert_locations,
+                                                            event_types,
+                                                            priorities,
+                                                            locations,
+                                                            )
+                            if check:
+                                checklist_ids = []
+                                ack_ids = []
+                                if settings.get_cap_checklist():
+                                    checklist_ids = create_checklist_from_template(\
+                                                        row.pr_subscription.id,
+                                                        info_row.event_type_id,
+                                                        row.pr_group.id, # group_id
+                                                        location_info,
+                                                        )
+
+                                if settings.get_cap_ack():
+                                    ack_ids = create_ack(alert_id, location_info)
+
+                                for checklist_id in checklist_ids:
+                                    mapping = {alert_id:
+                                               [{checklist_id["pe_id"]:
+                                                 [{checklist_id["location_id"]:
+                                                   [{ack_id[checklist_id["location_id"]]: checklist_id["checklist_id"]}]
+                                                   }]
+                                                 }]
+                                               }
+                                    all_info.append(mapping)
 
             # Twitter Post
             if settings.get_cap_post_to_twitter():
@@ -284,6 +357,258 @@ def config(settings):
 
     settings.customise_cap_alert_resource = customise_cap_alert_resource
 
+    # -------------------------------------------------------------------------
+    def get_events_priorities_locations(filter):
+        """
+            Get the event types, priorities and locations associated with the filter
+        """
+
+        event_types = []
+        priorities = []
+        locations = []
+
+        filters_ = json.loads(filters)
+        filters_ = [filter_ for filter_ in filters_ if filter_[1] is not None]
+        if len(filters_) > 0:
+            from s3 import s3_str
+            L0 = None
+            L1 = None
+            L2 = None
+            L3 = None
+            L4 = None
+            L5 = None
+            for filter_ in filters_:
+                # Get the prefix
+                prefix = s3_str(filter_[0]).strip("[]")
+                # Get the value for prefix
+                values = filter_[1].split(",")
+                if prefix == "event_type_id__belongs":
+                    event_types = [int(s3_str(value)) for value in values]
+                elif prefix == "priority__belongs":
+                    priorities = [int(s3_str(value)) for value in values]
+                elif prefix == "location_id$L0__belongs":
+                    L0 = [s3_str(value) for value in values]
+                elif prefix == "location_id$L1__belongs":
+                    L1 = [s3_str(value) for value in values]
+                elif prefix == "location_id$L2__belongs":
+                    L2 = [s3_str(value) for value in values]
+                elif prefix == "location_id$L3__belongs":
+                    L3 = [s3_str(value) for value in values]
+                elif prefix == "location_id$L4__belongs":
+                    L4 = [s3_str(value) for value in values]
+                elif prefix == "location_id$L5__belongs":
+                    L5 = [s3_str(value) for value in values]
+            if L0 is not None:
+                ltable = s3db.gis_location
+                locations_l1 = []
+                locations_l2 = []
+
+                query_l0 = (ltable.level == "L0") & \
+                           (ltable.name.belongs(L0))
+                rows_l0 = db(query_l0).select(ltable.id)
+                locations = locations_l0 = [row_l0.id for row_l0 in rows_l0]
+
+                if L1 is not None:
+                    query_l1 = (ltable.name.belongs(L1)) & \
+                               (ltable.level == "L1") & \
+                               (ltable.parent.belongs(locations_l0))
+                    rows_l1 = db(query_l1).select(ltable.id)
+                    locations = locations_l1 = [row_l1.id for row_l1 in rows_l1]
+
+                if L2 is not None:
+                    query_l2 = (ltable.name.belongs(L2)) & \
+                               (ltable.level == "L2") & \
+                               (ltable.parent.belongs(locations_l0) | \
+                                ltable.parent.belongs(locations_l1))
+                    rows_l2 = db(query_l2).select(ltable.id)
+                    locations = locations_l2 = [row_l2.id for row_l2 in rows_l2]
+
+                if L3 is not None:
+                    query_l3 = (ltable.name.belongs(L3)) & \
+                               (ltable.level == "L3") & \
+                               (ltable.parent.belongs(locations_l1) | \
+                                ltable.parent.belongs(location_l2))
+                    rows_l3 = db(query_l3).select(ltable.id)
+                    locations = [row_l3.id for row_l3 in rows_l3]
+                    if L4 is not None:
+                        query_l4 = (ltable.name.belongs(L4)) & \
+                                   (ltable.level == "L4") & \
+                                   (ltable.parent.belongs(locations))
+                        rows_l4 = db(query_l4).select(ltable.id)
+                        locations = [row_l4.id for row_l4 in rows_l4]
+                        if L5 is not None:
+                            query_l5 = (ltable.name.belongs(L5)) & \
+                                       (ltable.level == "L5") & \
+                                       (ltable.parent.belongs(locations))
+                            rows_l5 = db(query_l5).select(ltable.id)
+                            locations = [row_l5.id for row_l5 in rows_l5]
+
+        return (event_types, priorities, locations)
+
+    # -------------------------------------------------------------------------
+    def get_info(alert_event_type,
+                 alert_priority,
+                 alert_locations,
+                 event_types,
+                 priorities,
+                 locations
+                 ):
+        """
+            Check whether filter has the alert event_type and priority
+            check the intersection of the subscription with the alert locations
+            Return True and location_ids of subscription that intersect with the
+            alert locations, False and empty list if otherwise.
+        """
+
+        intersects = current.gis.intersects
+        check_event = True
+        check_priority = True
+        check_location = False
+        location_info = []
+
+        if len(event_types) > 0:
+            # Filter
+            if not (alert_event_type in event_types):
+                check_event = False
+        if len(priorities) > 0:
+            # Filter
+            if not (alert_priority in priorities):
+                check_priority = False
+        if len(locations) > 0:
+            # If location filter applies
+            for alert_location in alert_locations:
+                for location_id in locations:                
+                    if intersects(location_id, alert_location):
+                        check_location = True
+                        # NB: if len(location_info) > 1 for same alert_location => cross boundary?
+                        location_info.append({"subscription_location_id": location_id,
+                                              "alert_location": alert_location})
+        else:
+            # Else subscribed for all locations
+            check_location = True
+
+        return (check_event and check_priority and check_location, location_info)
+
+    # -------------------------------------------------------------------------
+    def create_checklist_from_template(alert_event_type,
+                                       group_id,
+                                       location_info
+                                       ):
+        """
+            Create a specific checklist from a template
+            @param alert_event_id: The event_type_id for a particular alert ID
+            @param group_id: The pr_group ID to send the checklist
+            @param location_info: Dictionary of the intersection between 
+            alert location and subscription location
+        """
+
+        tfieldnames = ("name",
+                       "instruction",
+                       )
+        tefieldnames = ("name",
+                        "checklist_order",
+                       )
+
+        db = current.db
+        s3db = current.s3db
+        gtable = s3db.pr_group_membership
+        ptable = s3db.pr_person
+        checklist_ids = []
+        
+        query = (gtable.deleted != True) & \
+                (gtable.group_id == group_id) & \
+                (gtable.person_id == ptable.id)
+        prows = db(query).select(ptable.pe_id)
+        if prows:
+            template_table = s3db.event_checklist_template
+            template_entries_table = s3db.event_checklist_template_entry
+            checklist_table = s3db.event_checklist
+            entries_table = s3db.event_checklist_entry
+
+            s3_set_record_owner = current.auth.s3_set_record_owner
+            #onaccept = s3db.onaccept
+            cinsert = checklist_table.insert
+            einsert = entries_table.insert
+
+            pe_ids = [row.pr_person.pe_id for row in prows]
+
+            query = (template_table.event_type_id == alert_event_type) & \
+                    (template_table.deleted != True)
+            for info in location_info:
+                # NB if len(location_info) > 1 for same alert_location=> Alert share more than one boundary                
+                query_ = query & (template_table.location_id == info["subscription_location_id"] or None)
+                template_rows = db(query_).select(template_table.id,
+                                                  template_table.location_id,
+                                                  limitby=(0, 2))
+                if len(template_rows) < 1:
+                    return checklist_ids
+                elif len(template_rows) > 1:
+                    # Remove the Location Default
+                    _filter = lambda row: row.location_id == None
+                    template_rows.exclude(_filter)
+                
+                template_row = template_rows.first()
+
+                template = db(template_table.id == template_row.id).select(\
+                                                        *tfieldnames,
+                                                        limitby=(0, 1)).first()
+                tequery = (template_entries_table.checklist_template_id == template_row.id) & \
+                          (template_entries_table.deleted != True)
+                template_entries = db(tequery).select(*tefieldnames)
+
+                for pe_id in pe_ids:
+                    cdata = {"pe_id": pe_ids[pe_id],
+                             "location_id": info["alert_location"],
+                             }
+                    for field in tfieldnames:
+                        cdata[field] = template[field]
+    
+                    cid = cinsert(**cdata)
+                    s3_set_record_owner(checklist_table, cid)
+                    # Uncomment this when there is onaccept hook in event_checklist table
+                    #onaccept(checklist_table, dict(id=cid))
+    
+                    prop = {"pe_id": pe_ids[pe_id],
+                            "checklist_id": cid,
+                            "alert_location": info["alert_location"],
+                            "location_id" : info["subscription_location_id"]
+                            }
+                    checklist_ids.append(prop)
+    
+                    if template_entries:
+                        # Add checklist template entries
+                        for row in template_entries:
+                            edata = {"event_checklist_id": cid,
+                                     }
+                            for field in tefieldnames:
+                                edata[field] = row[field]
+                            eid = einsert(**edata)
+                            s3_set_record_owner(entries_table, eid)
+                            # Uncomment this when there is onaccept hook in event_checklist table
+                            #onaccept(entires_table, dict(id=eid))
+
+        return checklist_ids
+
+    # -------------------------------------------------------------------------
+    def create_ack(alert_id, location_info):
+        """
+            Create a specific acknowledgement
+            @param alert_id: The particular alert ID for acknowledging
+            @param location_info: Dictionary of the intersection between 
+            alert location and subscription location
+        """
+
+        ack_table = current.s3db.cap_alert_ack
+        ack_ids = []
+        for info in  location_info:        
+            ack_id = ack_table.insert(alert_id = alert_id,
+                                      location_id = info["alert_location"])
+            current.auth.s3_set_record_owner(ack_table, ack_id)
+            # Uncomment this when there is onaccept hook
+            #current.s3db.onaccept(ack_table, dict(id=ack_id))
+            ack_ids.append({info["subscription_location_id"]: ack_id})
+        return ack_ids
+        
     # -------------------------------------------------------------------------
     def customise_sync_repository_controller(**attr):
 

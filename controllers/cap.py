@@ -985,6 +985,14 @@ def warning_priority():
     return s3_rest_controller()
 
 # -----------------------------------------------------------------------------
+def alert_ack():
+    """
+        RESTful CRUD controller
+    """
+
+    return s3_rest_controller()
+
+# -----------------------------------------------------------------------------
 def compose():
     """
         Send message to the people with role of Alert Approval
